@@ -1,6 +1,6 @@
 {
   "name": "collective-instant",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "\"Instantly\" search Widen Media Collective for assets",
   "main": "index.js",
   "bin": {
@@ -11,8 +11,8 @@
     "test": "echo \"browserify test/all-test.js | testling\" && exit 0",
     "coverage": "echo \"browserify --debug -t coverify test/all-test.js | node | coverify\" && exit 0",
     "watch": "nodemon -w index.js -w lib -x 'npm run dev'",
-    "dev": "browserify index.js --debug --standalone collective_instant | exorcist ./static/bundle.map.js > static/bundle.js",
-    "build": "browserify index.js --standalone collective_instant > static/bundle.js && cat static/bundle.js | uglifyjs > static/bundle.min.js", "dev": "collective-oauth-server --collective-protocol http --collective-host localhost --collective-port 8080 -p 1337 --host localhost --static ./static",
+    "dev": "collective-oauth-server --collective-protocol http --collective-host localhost --collective-port 8080 -p 1337 --host localhost --static ./static",
+    "build": "browserify index.js --standalone collective_instant > static/bundle.js && cat static/bundle.js | uglifyjs > static/bundle.min.js",
     "start": "collective-oauth-server",
     "prepublish": "npm run build"
   },
