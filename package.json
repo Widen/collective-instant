@@ -31,9 +31,7 @@
     "console-stream": "^0.1.1",
     "cookie-cutter": "^0.1.1",
     "detect-dom-ready": "^1.0.2",
-    "media-collective": "^1.0.0",
-    "minimist": "^1.1.0",
-    "st": "^0.5.2",
+    "media-collective": "^1.0.5",
     "uuid": "^2.0.1"
   }
 }
