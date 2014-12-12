@@ -63,8 +63,6 @@ dom_ready(function domready() {
                 return previewUrls;
             }, function(err){
                 log.info('Rejected', err);
-            }).catch(function(err) {
-                log.info('Exception', err);
             }).then(function(previewUrls){
 
                 var imgTags = previewUrls.map(function(previewUrl){
@@ -8142,7 +8140,7 @@ module.exports = function(callback){
     }
 };
 },{}],72:[function(require,module,exports){
-(function (Buffer){
+(function (process,Buffer){
 'use strict';
 
 var http = require('http'),
@@ -8151,12 +8149,24 @@ var http = require('http'),
     url = require('url'),
     assert = require('assert');
 
-var debug = require('debug')('collective'),
-    promise = require('promise');
+var promise = require('promise'),
+    console_stream = require('console-stream'),
+    bole = require('bole'),
+    pretty = require('bistre')();
 
 var STATUS_CODES = http.STATUS_CODES,
     PROTOCOLS = { 'http': http, 'https': https },
     PORTS = { http: 80, https: 443 };
+
+var logLevel = 'info';
+if (process.env.NODE_ENV &&
+    ('dev|debug').indexOf(process.env.NODE_ENV.toLowerCase() !== -1)) {
+    logLevel = 'debug';
+}
+var log = bole('collective');
+bole.output({ level: logLevel, stream: pretty });
+pretty.pipe(console_stream());
+
 
 /**
  * request
@@ -8177,7 +8187,7 @@ var STATUS_CODES = http.STATUS_CODES,
  */
 var request = function request(method, path, query, options, callback){
 
-   return new promise(function(resolve, reject) {
+    return new promise(function(resolve, reject) {
         options = JSON.parse(JSON.stringify(options || {}));
 
         var protocol = options.protocol || 'https',
@@ -8218,12 +8228,12 @@ var request = function request(method, path, query, options, callback){
 
         var body;
         if (hasBody){
-            debug('Detected request body');
+            log.debug('Detected request body data');
             body = JSON.stringify(query) + '\n';
             headers['content-length'] = Buffer.byteLength(body, 'utf-8');
             headers['content-type'] = 'application/json; charset=utf-8';
         } else if (query !== null){
-            debug('Detected URL query data');
+            log.debug('Detected URL query data');
             headers['content-type'] = 'text/plain; charset=utf-8';
             body = qs.stringify(query);
             if (body.length){
@@ -8232,23 +8242,23 @@ var request = function request(method, path, query, options, callback){
         }
 
         if (options.auth) {
-            debug('Detected auth');
+            log.debug('Detected auth');
             switch (options.auth.type) {
                 case 'oauth':
-                    debug('Detected oauth');
+                    log.debug('Detected oauth');
                     path += (path.indexOf('?') === -1 ? '?' : '&') +
                         'access_token=' +
                         encodeURIComponent(options.auth.token);
                     break;
                 case 'basic':
-                    debug('Detected basic auth');
+                    log.debug('Detected basic auth');
                     headers.authorization = 'Basic ' + new Buffer(
                         options.auth.username +
                         ':' +
                         options.auth.password, 'ascii').toString('base64');
                     break;
                 case 'bearer':
-                    debug('Detected bearer token');
+                    log.debug('Detected bearer token');
                     headers.Authorization = 'Bearer ' + options.auth.bearer;
                     break;
                 default:
@@ -8267,11 +8277,11 @@ var request = function request(method, path, query, options, callback){
 
         var full_path = '/api/rest' + path;
 
-        debug('Protocol: ' + protocol);
-        debug('Host: ' + host);
-        debug('Port: ' + port);
-        debug('Method: ' + method);
-        debug('Path: ' + full_path);
+        log.debug('Protocol: ' + protocol);
+        log.debug('Host: ' + host);
+        log.debug('Port: ' + port);
+        log.debug('Method: ' + method);
+        log.debug('Path: ' + full_path);
 
         var req = PROTOCOLS[protocol].request({
             host: host,
@@ -8280,28 +8290,34 @@ var request = function request(method, path, query, options, callback){
             path: full_path,
             headers: headers,
             withCredentials: false
-        }, function(res){
-            debug('STATUS: ' + res.statusCode);
+        });
+
+        req.on('response', function(res){
+
+            res.on('error', function(e) {
+                log.error('Response error', e);
+                reject(e);
+            });
+
+            log.debug('Response status: ' + res.statusCode);
             if ([301,302,307].indexOf(res.statusCode) !== -1) {
-                debug('Recevied ' + res.statusCode + ' redirect');
+                log.debug('Recevied ' + res.statusCode + ' redirect');
                 var location = url.parse(res.headers.location);
                 options.protocol = location.protocol.substring(0,
                                             location.protocol.length - 1);
                 options.host = location.host;
-                var req = request(method, location.pathname, query,
+                var redirect_request = request(method, location.pathname, query,
                                   options);
-                return resolve(req);
+                return resolve(redirect_request);
             }
-            if (res.statusCode >= 400) {
-                debug('Recevied ' + res.statusCode + ' error');
+            if (res.statusCode === 0 || res.statusCode >= 400) {
                 var buf = [],
                     buffer;
                 res.on('data', function(d) {
+                    if (!Buffer.isBuffer(d)) {
+                        d = new Buffer(d);
+                    }
                     buf.push(d);
-                });
-                res.on('error', function(e) {
-                    debug(e);
-                    reject(e);
                 });
                 res.on('end', function(){
                     buffer = new Buffer.concat(buf);
@@ -8311,13 +8327,14 @@ var request = function request(method, path, query, options, callback){
                         res.body = buffer.toString('utf-8');
                     } catch (exception) {
                     } finally {
-                        var err_message = STATUS_CODES[res.statusCode];
+                        var err_message = STATUS_CODES[res.statusCode] ||
+                                          'UnknownHttpError';
                         err.name = err_message.replace(/ /g, '');
                         err.method = method;
                         err.path = path;
                         err.statusCode = (err.code = res.statusCode);
                         err.res = res;
-                        debug(err);
+                        log.debug(err);
                         reject(err);
                     }
                 });
@@ -8327,22 +8344,22 @@ var request = function request(method, path, query, options, callback){
             }
         });
 
-        if (options.timeout) {
-            req.setTimeout(options.timeout);
-        }
-
         req.on('error', function(e){
-            debug('Error', e);
+            log.error('Request error', e);
             reject(e);
         });
 
+        req.on('close', function(){
+            log.debug('Request close');
+        });
+
         if (hasBody){
-            debug('Writing body');
+            log.debug('Request send body');
             req.end(body);
-            debug('Request ended');
+            log.debug('Request end');
         } else {
-            debug('Request ended');
             req.end();
+            log.debug('Request end');
         }
 
    }).nodeify(callback);
@@ -8360,25 +8377,28 @@ var request = function request(method, path, query, options, callback){
 var buffer = function buffer(method, path, query, options, callback){
 
     return request(method, path, query, options).then(function (res) {
-            return new promise(function(resolve, reject){
-                var buf = [],
-                    buffer;
-                res.on('data', function(d) {
-                    if (!Buffer.isBuffer(d)) {
-                        d = new Buffer(d);
-                    }
-                    buf.push(d);
-                });
-                res.on('end', function(){
-                    buffer = new Buffer.concat(buf);
-                    res.body = buffer;
-                    resolve(res);
-                });
-                res.on('error', function(e){
-                    reject(e);
-                });
+        return new promise(function(resolve, reject){
+            var buf = [],
+                buffer;
+            res.on('data', function(d) {
+                log.debug('Data received', d);
+                if (!Buffer.isBuffer(d)) {
+                    d = new Buffer(d);
+                }
+                buf.push(d);
             });
-        }).nodeify(callback);
+            res.on('end', function(){
+                log.debug('Buffer allocated');
+                buffer = new Buffer.concat(buf);
+                res.body = buffer;
+                resolve(res);
+            });
+            res.on('error', function(e){
+                log.error('Buffer allocation error', e);
+                reject(e);
+            });
+        });
+    }).nodeify(callback);
 };
 
 /**
@@ -8392,487 +8412,26 @@ var buffer = function buffer(method, path, query, options, callback){
 var json = function json(method, path, query, options, callback) {
 
     return buffer(method, path, query, options).then(function(res){
-            if (res.body) {
-                res.body = JSON.parse(res.body.toString('utf-8'));
-            }
-            return res;
-        }).nodeify(callback);
+        if (res.body) {
+            res.body = JSON.parse(res.body.toString('utf-8'));
+        }
+        return res;
+    }).nodeify(callback);
 };
 
 exports = ( module.exports = request );
 exports.json = json;
 exports.buffer = buffer;
 
-}).call(this,require("buffer").Buffer)
-},{"assert":31,"buffer":32,"debug":73,"http":39,"https":43,"promise":76,"querystring":51,"url":65}],73:[function(require,module,exports){
-
-/**
- * This is the web browser implementation of `debug()`.
- *
- * Expose `debug()` as the module.
- */
-
-exports = module.exports = require('./debug');
-exports.log = log;
-exports.formatArgs = formatArgs;
-exports.save = save;
-exports.load = load;
-exports.useColors = useColors;
-
-/**
- * Colors.
- */
-
-exports.colors = [
-  'lightseagreen',
-  'forestgreen',
-  'goldenrod',
-  'dodgerblue',
-  'darkorchid',
-  'crimson'
-];
-
-/**
- * Currently only WebKit-based Web Inspectors, Firefox >= v31,
- * and the Firebug extension (any Firefox version) are known
- * to support "%c" CSS customizations.
- *
- * TODO: add a `localStorage` variable to explicitly enable/disable colors
- */
-
-function useColors() {
-  // is webkit? http://stackoverflow.com/a/16459606/376773
-  return ('WebkitAppearance' in document.documentElement.style) ||
-    // is firebug? http://stackoverflow.com/a/398120/376773
-    (window.console && (console.firebug || (console.exception && console.table))) ||
-    // is firefox >= v31?
-    // https://developer.mozilla.org/en-US/docs/Tools/Web_Console#Styling_messages
-    (navigator.userAgent.toLowerCase().match(/firefox\/(\d+)/) && parseInt(RegExp.$1, 10) >= 31);
-}
-
-/**
- * Map %j to `JSON.stringify()`, since no Web Inspectors do that by default.
- */
-
-exports.formatters.j = function(v) {
-  return JSON.stringify(v);
-};
-
-
-/**
- * Colorize log arguments if enabled.
- *
- * @api public
- */
-
-function formatArgs() {
-  var args = arguments;
-  var useColors = this.useColors;
-
-  args[0] = (useColors ? '%c' : '')
-    + this.namespace
-    + (useColors ? ' %c' : ' ')
-    + args[0]
-    + (useColors ? '%c ' : ' ')
-    + '+' + exports.humanize(this.diff);
-
-  if (!useColors) return args;
-
-  var c = 'color: ' + this.color;
-  args = [args[0], c, 'color: inherit'].concat(Array.prototype.slice.call(args, 1));
-
-  // the final "%c" is somewhat tricky, because there could be other
-  // arguments passed either before or after the %c, so we need to
-  // figure out the correct index to insert the CSS into
-  var index = 0;
-  var lastC = 0;
-  args[0].replace(/%[a-z%]/g, function(match) {
-    if ('%%' === match) return;
-    index++;
-    if ('%c' === match) {
-      // we only are interested in the *last* %c
-      // (the user may have provided their own)
-      lastC = index;
-    }
-  });
-
-  args.splice(lastC, 0, c);
-  return args;
-}
-
-/**
- * Invokes `console.log()` when available.
- * No-op when `console.log` is not a "function".
- *
- * @api public
- */
-
-function log() {
-  // This hackery is required for IE8,
-  // where the `console.log` function doesn't have 'apply'
-  return 'object' == typeof console
-    && 'function' == typeof console.log
-    && Function.prototype.apply.call(console.log, console, arguments);
-}
-
-/**
- * Save `namespaces`.
- *
- * @param {String} namespaces
- * @api private
- */
-
-function save(namespaces) {
-  try {
-    if (null == namespaces) {
-      localStorage.removeItem('debug');
-    } else {
-      localStorage.debug = namespaces;
-    }
-  } catch(e) {}
-}
-
-/**
- * Load `namespaces`.
- *
- * @return {String} returns the previously persisted debug modes
- * @api private
- */
-
-function load() {
-  var r;
-  try {
-    r = localStorage.debug;
-  } catch(e) {}
-  return r;
-}
-
-/**
- * Enable namespaces listed in `localStorage.debug` initially.
- */
-
-exports.enable(load());
-
-},{"./debug":74}],74:[function(require,module,exports){
-
-/**
- * This is the common logic for both the Node.js and web browser
- * implementations of `debug()`.
- *
- * Expose `debug()` as the module.
- */
-
-exports = module.exports = debug;
-exports.coerce = coerce;
-exports.disable = disable;
-exports.enable = enable;
-exports.enabled = enabled;
-exports.humanize = require('ms');
-
-/**
- * The currently active debug mode names, and names to skip.
- */
-
-exports.names = [];
-exports.skips = [];
-
-/**
- * Map of special "%n" handling functions, for the debug "format" argument.
- *
- * Valid key names are a single, lowercased letter, i.e. "n".
- */
-
-exports.formatters = {};
-
-/**
- * Previously assigned color.
- */
-
-var prevColor = 0;
-
-/**
- * Previous log timestamp.
- */
-
-var prevTime;
-
-/**
- * Select a color.
- *
- * @return {Number}
- * @api private
- */
-
-function selectColor() {
-  return exports.colors[prevColor++ % exports.colors.length];
-}
-
-/**
- * Create a debugger with the given `namespace`.
- *
- * @param {String} namespace
- * @return {Function}
- * @api public
- */
-
-function debug(namespace) {
-
-  // define the `disabled` version
-  function disabled() {
-  }
-  disabled.enabled = false;
-
-  // define the `enabled` version
-  function enabled() {
-
-    var self = enabled;
-
-    // set `diff` timestamp
-    var curr = +new Date();
-    var ms = curr - (prevTime || curr);
-    self.diff = ms;
-    self.prev = prevTime;
-    self.curr = curr;
-    prevTime = curr;
-
-    // add the `color` if not set
-    if (null == self.useColors) self.useColors = exports.useColors();
-    if (null == self.color && self.useColors) self.color = selectColor();
-
-    var args = Array.prototype.slice.call(arguments);
-
-    args[0] = exports.coerce(args[0]);
-
-    if ('string' !== typeof args[0]) {
-      // anything else let's inspect with %o
-      args = ['%o'].concat(args);
-    }
-
-    // apply any `formatters` transformations
-    var index = 0;
-    args[0] = args[0].replace(/%([a-z%])/g, function(match, format) {
-      // if we encounter an escaped % then don't increase the array index
-      if (match === '%%') return match;
-      index++;
-      var formatter = exports.formatters[format];
-      if ('function' === typeof formatter) {
-        var val = args[index];
-        match = formatter.call(self, val);
-
-        // now we need to remove `args[index]` since it's inlined in the `format`
-        args.splice(index, 1);
-        index--;
-      }
-      return match;
-    });
-
-    if ('function' === typeof exports.formatArgs) {
-      args = exports.formatArgs.apply(self, args);
-    }
-    var logFn = enabled.log || exports.log || console.log.bind(console);
-    logFn.apply(self, args);
-  }
-  enabled.enabled = true;
-
-  var fn = exports.enabled(namespace) ? enabled : disabled;
-
-  fn.namespace = namespace;
-
-  return fn;
-}
-
-/**
- * Enables a debug mode by namespaces. This can include modes
- * separated by a colon and wildcards.
- *
- * @param {String} namespaces
- * @api public
- */
-
-function enable(namespaces) {
-  exports.save(namespaces);
-
-  var split = (namespaces || '').split(/[\s,]+/);
-  var len = split.length;
-
-  for (var i = 0; i < len; i++) {
-    if (!split[i]) continue; // ignore empty strings
-    namespaces = split[i].replace(/\*/g, '.*?');
-    if (namespaces[0] === '-') {
-      exports.skips.push(new RegExp('^' + namespaces.substr(1) + '$'));
-    } else {
-      exports.names.push(new RegExp('^' + namespaces + '$'));
-    }
-  }
-}
-
-/**
- * Disable debug output.
- *
- * @api public
- */
-
-function disable() {
-  exports.enable('');
-}
-
-/**
- * Returns true if the given mode name is enabled, false otherwise.
- *
- * @param {String} name
- * @return {Boolean}
- * @api public
- */
-
-function enabled(name) {
-  var i, len;
-  for (i = 0, len = exports.skips.length; i < len; i++) {
-    if (exports.skips[i].test(name)) {
-      return false;
-    }
-  }
-  for (i = 0, len = exports.names.length; i < len; i++) {
-    if (exports.names[i].test(name)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Coerce `val`.
- *
- * @param {Mixed} val
- * @return {Mixed}
- * @api private
- */
-
-function coerce(val) {
-  if (val instanceof Error) return val.stack || val.message;
-  return val;
-}
-
-},{"ms":75}],75:[function(require,module,exports){
-/**
- * Helpers.
- */
-
-var s = 1000;
-var m = s * 60;
-var h = m * 60;
-var d = h * 24;
-var y = d * 365.25;
-
-/**
- * Parse or format the given `val`.
- *
- * Options:
- *
- *  - `long` verbose formatting [false]
- *
- * @param {String|Number} val
- * @param {Object} options
- * @return {String|Number}
- * @api public
- */
-
-module.exports = function(val, options){
-  options = options || {};
-  if ('string' == typeof val) return parse(val);
-  return options.long
-    ? long(val)
-    : short(val);
-};
-
-/**
- * Parse the given `str` and return milliseconds.
- *
- * @param {String} str
- * @return {Number}
- * @api private
- */
-
-function parse(str) {
-  var match = /^((?:\d+)?\.?\d+) *(ms|seconds?|s|minutes?|m|hours?|h|days?|d|years?|y)?$/i.exec(str);
-  if (!match) return;
-  var n = parseFloat(match[1]);
-  var type = (match[2] || 'ms').toLowerCase();
-  switch (type) {
-    case 'years':
-    case 'year':
-    case 'y':
-      return n * y;
-    case 'days':
-    case 'day':
-    case 'd':
-      return n * d;
-    case 'hours':
-    case 'hour':
-    case 'h':
-      return n * h;
-    case 'minutes':
-    case 'minute':
-    case 'm':
-      return n * m;
-    case 'seconds':
-    case 'second':
-    case 's':
-      return n * s;
-    case 'ms':
-      return n;
-  }
-}
-
-/**
- * Short format for `ms`.
- *
- * @param {Number} ms
- * @return {String}
- * @api private
- */
-
-function short(ms) {
-  if (ms >= d) return Math.round(ms / d) + 'd';
-  if (ms >= h) return Math.round(ms / h) + 'h';
-  if (ms >= m) return Math.round(ms / m) + 'm';
-  if (ms >= s) return Math.round(ms / s) + 's';
-  return ms + 'ms';
-}
-
-/**
- * Long format for `ms`.
- *
- * @param {Number} ms
- * @return {String}
- * @api private
- */
-
-function long(ms) {
-  return plural(ms, d, 'day')
-    || plural(ms, h, 'hour')
-    || plural(ms, m, 'minute')
-    || plural(ms, s, 'second')
-    || ms + ' ms';
-}
-
-/**
- * Pluralization helper.
- */
-
-function plural(ms, n, name) {
-  if (ms < n) return;
-  if (ms < n * 1.5) return Math.floor(ms / n) + ' ' + name;
-  return Math.ceil(ms / n) + ' ' + name + 's';
-}
-
-},{}],76:[function(require,module,exports){
+}).call(this,require('_process'),require("buffer").Buffer)
+},{"_process":47,"assert":31,"bistre":2,"bole":27,"buffer":32,"console-stream":68,"http":39,"https":43,"promise":73,"querystring":51,"url":65}],73:[function(require,module,exports){
 'use strict';
 
 module.exports = require('./lib/core.js')
 require('./lib/done.js')
 require('./lib/es6-extensions.js')
 require('./lib/node-extensions.js')
-},{"./lib/core.js":77,"./lib/done.js":78,"./lib/es6-extensions.js":79,"./lib/node-extensions.js":80}],77:[function(require,module,exports){
+},{"./lib/core.js":74,"./lib/done.js":75,"./lib/es6-extensions.js":76,"./lib/node-extensions.js":77}],74:[function(require,module,exports){
 'use strict';
 
 var asap = require('asap')
@@ -8979,7 +8538,7 @@ function doResolve(fn, onFulfilled, onRejected) {
   }
 }
 
-},{"asap":81}],78:[function(require,module,exports){
+},{"asap":78}],75:[function(require,module,exports){
 'use strict';
 
 var Promise = require('./core.js')
@@ -8994,7 +8553,7 @@ Promise.prototype.done = function (onFulfilled, onRejected) {
     })
   })
 }
-},{"./core.js":77,"asap":81}],79:[function(require,module,exports){
+},{"./core.js":74,"asap":78}],76:[function(require,module,exports){
 'use strict';
 
 //This file contains the ES6 extensions to the core Promises/A+ API
@@ -9104,7 +8663,7 @@ Promise.prototype['catch'] = function (onRejected) {
   return this.then(null, onRejected);
 }
 
-},{"./core.js":77,"asap":81}],80:[function(require,module,exports){
+},{"./core.js":74,"asap":78}],77:[function(require,module,exports){
 'use strict';
 
 //This file contains then/promise specific extensions that are only useful for node.js interop
@@ -9166,7 +8725,7 @@ Promise.prototype.nodeify = function (callback, ctx) {
   })
 }
 
-},{"./core.js":77,"asap":81}],81:[function(require,module,exports){
+},{"./core.js":74,"asap":78}],78:[function(require,module,exports){
 (function (process){
 
 // Use the fastest possible means to execute a task in a future turn
