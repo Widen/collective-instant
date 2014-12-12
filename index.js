@@ -62,8 +62,6 @@ dom_ready(function domready() {
                 return previewUrls;
             }, function(err){
                 log.info('Rejected', err);
-            }).catch(function(err) {
-                log.info('Exception', err);
             }).then(function(previewUrls){
 
                 var imgTags = previewUrls.map(function(previewUrl){
