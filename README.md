@@ -12,6 +12,8 @@ Two things:
 This is what communicates with Collective to give each separate user their
 own credentials so they can only see and do what they are allowed to.
 
+You can find the module at [collective-oauth-server](https://www.npmjs.com/package/collective-oauth-server) on npm.
+
 2) A javascript instant search
 
 Just type in a query and this will search for asset previews based on your
