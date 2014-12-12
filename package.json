@@ -1,6 +1,6 @@
 {
   "name": "collective-instant",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "\"Instantly\" search Widen Media Collective for assets",
   "main": "index.js",
   "bin": {
